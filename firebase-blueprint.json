@@ -1,0 +1,42 @@
+{
+  "entities": {
+    "Album": {
+      "title": "Album",
+      "description": "A collection of photos.",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string", "description": "The name of the album." },
+        "description": { "type": "string", "description": "A brief description of the album." },
+        "userId": { "type": "string", "description": "The ID of the user who owns the album." },
+        "createdAt": { "type": "string", "format": "date-time", "description": "When the album was created." }
+      },
+      "required": ["name", "userId", "createdAt"]
+    },
+    "Photo": {
+      "title": "Photo",
+      "description": "An image with metadata.",
+      "type": "object",
+      "properties": {
+        "title": { "type": "string", "description": "The title of the photo." },
+        "description": { "type": "string", "description": "A description of the photo." },
+        "url": { "type": "string", "format": "uri", "description": "The URL of the photo image." },
+        "albumId": { "type": "string", "description": "The ID of the album this photo belongs to." },
+        "userId": { "type": "string", "description": "The ID of the user who uploaded the photo." },
+        "isPublic": { "type": "boolean", "description": "Whether the photo is shareable with a public link." },
+        "createdAt": { "type": "string", "format": "date-time", "description": "When the photo was uploaded." },
+        "tags": { "type": "array", "items": { "type": "string" }, "description": "Tags for search and organization." }
+      },
+      "required": ["url", "userId", "createdAt"]
+    }
+  },
+  "firestore": {
+    "albums": {
+      "schema": "Album",
+      "description": "Collections of user-defined albums."
+    },
+    "photos": {
+      "schema": "Photo",
+      "description": "All uploaded photos across all albums."
+    }
+  }
+}

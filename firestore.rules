@@ -1,0 +1,63 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // 0. Global Safety Net
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Phase 3: Primitives
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+    function incoming() { return request.resource.data; }
+    function existing() { return resource.data; }
+    function isSignedIn() { return request.auth != null; }
+    function isOwner(data) { return isSignedIn() && data.userId == request.auth.uid; }
+    function isVerified() { return request.auth.token.email_verified == true; }
+
+    // Phase 4: Entity Validation
+    function isValidAlbum(data) {
+      return data.keys().hasAll(['name', 'userId', 'createdAt']) &&
+             data.name is string && data.name.size() > 0 && data.name.size() <= 100 &&
+             data.userId == request.auth.uid &&
+             data.createdAt == request.time &&
+             (data.get('description', '') is string && data.description.size() <= 500);
+    }
+
+    function isValidPhoto(data) {
+      return data.keys().hasAll(['url', 'userId', 'createdAt']) &&
+             data.url is string && data.url.size() <= 2048 &&
+             data.userId == request.auth.uid &&
+             data.createdAt == request.time &&
+             (data.get('isPublic', false) is bool) &&
+             (data.get('title', '') is string && data.title.size() <= 200) &&
+             (data.get('description', '') is string && data.description.size() <= 1000) &&
+             (data.get('albumId', null) == null || (isValidId(data.albumId) && exists(/databases/$(database)/documents/albums/$(data.albumId)))) &&
+             (data.get('tags', []) is list && data.tags.size() <= 20);
+    }
+
+    // Collections
+    match /albums/{albumId} {
+      allow get: if isOwner(existing());
+      allow list: if isOwner(resource.data);
+      allow create: if isSignedIn() && isVerified() && isValidId(albumId) && isValidAlbum(incoming());
+      allow update: if isOwner(existing()) && isVerified() && isValidAlbum(incoming()) &&
+                    incoming().userId == existing().userId &&
+                    incoming().createdAt == existing().createdAt &&
+                    incoming().diff(existing()).affectedKeys().hasOnly(['name', 'description']);
+      allow delete: if isOwner(existing());
+    }
+
+    match /photos/{photoId} {
+      allow get: if isOwner(existing()) || existing().get('isPublic', false) == true;
+      allow list: if isOwner(resource.data);
+      allow create: if isSignedIn() && isVerified() && isValidId(photoId) && isValidPhoto(incoming());
+      allow update: if isOwner(existing()) && isVerified() && isValidPhoto(incoming()) &&
+                    incoming().userId == existing().userId &&
+                    incoming().createdAt == existing().createdAt &&
+                    incoming().diff(existing()).affectedKeys().hasOnly(['title', 'description', 'albumId', 'tags', 'isPublic']);
+      allow delete: if isOwner(existing());
+    }
+  }
+}
