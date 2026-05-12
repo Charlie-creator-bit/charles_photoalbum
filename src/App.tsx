@@ -36,6 +36,7 @@ export default function App() {
   const [isCreateAlbumOpen, setIsCreateAlbumOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [shareStatus, setShareStatus] = useState<{[key: string]: string}>({});
+  const [confirmConfig, setConfirmConfig] = useState<ConfirmConfig | null>(null);
 
   useEffect(() => {
     const urlParams = new URLSearchParams(window.location.search);
@@ -185,14 +186,20 @@ export default function App() {
                   onClick={() => setSelectedAlbumId(album.id)}
                   onDelete={async (e) => {
                     e.stopPropagation();
-                    if (confirm("Delete this album? Photos won't be deleted.")) {
-                      try {
-                        await photoService.deleteAlbum(album.id);
-                        if (selectedAlbumId === album.id) setSelectedAlbumId(null);
-                      } catch (err: any) {
-                        alert("Failed to delete album: " + err.message);
+                    setConfirmConfig({
+                      title: "Delete Album",
+                      message: `Are you sure you want to delete "${album.name}"? The photos inside this album will not be deleted.`,
+                      confirmLabel: "Delete Album",
+                      isDestructive: true,
+                      onConfirm: async () => {
+                        try {
+                          await photoService.deleteAlbum(album.id);
+                          if (selectedAlbumId === album.id) setSelectedAlbumId(null);
+                        } catch (err: any) {
+                          alert("Failed to delete album: " + err.message);
+                        }
                       }
-                    }
+                    });
                   }}
                 />
               ))}
@@ -204,14 +211,19 @@ export default function App() {
             <button 
               onClick={async () => {
                 if (photos.length === 0) return;
-                if (confirm(`Are you sure you want to delete ALL ${photos.length} memories? This cannot be undone.`)) {
-                  try {
-                    await photoService.deleteAllPhotos(photos);
-                    alert("Library cleared successfully");
-                  } catch (err: any) {
-                    alert("Failed to clear library: " + err.message);
+                setConfirmConfig({
+                  title: "Clear Entire Library",
+                  message: `Are you sure you want to delete ALL ${photos.length} memories? This action is permanent and cannot be undone.`,
+                  confirmLabel: "Clear Library",
+                  isDestructive: true,
+                  onConfirm: async () => {
+                    try {
+                      await photoService.deleteAllPhotos(photos);
+                    } catch (err: any) {
+                      alert("Failed to clear library: " + err.message);
+                    }
                   }
-                }
+                });
               }}
               className="w-full flex items-center gap-3 px-4 py-3 rounded-xl text-slate-400 hover:bg-red-500/10 hover:text-red-400 transition-all duration-300"
             >
@@ -317,13 +329,19 @@ export default function App() {
                     <button 
                       onClick={async (e) => {
                         e.stopPropagation();
-                        if (confirm("Remove this memory?")) {
-                          try {
-                            await photoService.deletePhoto(photo);
-                          } catch (err: any) {
-                            alert("Failed to delete memory: " + err.message);
+                        setConfirmConfig({
+                          title: "Remove Memory",
+                          message: "Are you sure you want to permanently remove this memory from your library?",
+                          confirmLabel: "Delete",
+                          isDestructive: true,
+                          onConfirm: async () => {
+                            try {
+                              await photoService.deletePhoto(photo);
+                            } catch (err: any) {
+                              alert("Failed to delete memory: " + err.message);
+                            }
                           }
-                        }
+                        });
                       }}
                       className="p-3 bg-red-500/10 backdrop-blur-md rounded-2xl border border-red-500/20 shadow-xl hover:bg-red-500/20 transition-colors group/delete"
                       title="Remove from Library"
@@ -440,14 +458,20 @@ export default function App() {
 
                   <button 
                     onClick={async () => {
-                      if (confirm("Are you sure you want to delete this memory?")) {
-                        try {
-                          await photoService.deletePhoto(viewingPhoto);
-                          setViewingPhoto(null);
-                        } catch (err: any) {
-                          alert("Failed to delete memory: " + err.message);
+                      setConfirmConfig({
+                        title: "Remove Memory",
+                        message: "Are you sure you want to permanently remove this memory from your library?",
+                        confirmLabel: "Delete",
+                        isDestructive: true,
+                        onConfirm: async () => {
+                          try {
+                            await photoService.deletePhoto(viewingPhoto);
+                            setViewingPhoto(null);
+                          } catch (err: any) {
+                            alert("Failed to delete memory: " + err.message);
+                          }
                         }
-                      }
+                      });
                     }}
                     className="w-full py-4 border border-red-500/20 text-red-400 rounded-2xl hover:bg-red-500/10 transition-all flex items-center justify-center gap-2 text-sm font-bold active:scale-95"
                   >
@@ -474,9 +498,100 @@ export default function App() {
       <Modal isOpen={isCreateAlbumOpen} onClose={() => setIsCreateAlbumOpen(false)} title="Create New Album">
         <AlbumForm onClose={() => setIsCreateAlbumOpen(false)} />
       </Modal>
+
+      {/* Confirmation Modal */}
+      <ConfirmationModal 
+        isOpen={!!confirmConfig} 
+        onClose={() => setConfirmConfig(null)} 
+        config={confirmConfig} 
+      />
     </div>
   );
 }
+
+interface ConfirmConfig {
+  title: string;
+  message: string;
+  onConfirm: () => Promise<void>;
+  confirmLabel?: string;
+  isDestructive?: boolean;
+}
+
+const ConfirmationModal: FC<{ 
+  isOpen: boolean; 
+  onClose: () => void; 
+  config: ConfirmConfig | null 
+}> = ({ isOpen, onClose, config }) => {
+  const [submitting, setSubmitting] = useState(false);
+
+  useEffect(() => {
+    if (isOpen) setSubmitting(false);
+  }, [isOpen]);
+
+  if (!config) return null;
+
+  const handleConfirm = async () => {
+    setSubmitting(true);
+    try {
+      await config.onConfirm();
+      onClose();
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <AnimatePresence>
+      {isOpen && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center p-6">
+          <motion.div 
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="absolute inset-0 bg-slate-900/90 backdrop-blur-xl" 
+            onClick={onClose} 
+          />
+          <motion.div 
+            initial={{ scale: 0.9, opacity: 0, y: 20 }}
+            animate={{ scale: 1, opacity: 1, y: 0 }}
+            exit={{ scale: 0.9, opacity: 0, y: 20 }}
+            className="relative w-full max-w-sm bg-slate-800 rounded-[2.5rem] border border-white/10 shadow-2xl overflow-hidden p-10 text-center"
+          >
+            <div className={`w-20 h-20 mx-auto rounded-3xl flex items-center justify-center mb-6 ${config.isDestructive ? 'bg-red-500/10 text-red-500' : 'bg-indigo-500/10 text-indigo-500'}`}>
+              <Trash2 className="w-10 h-10" />
+            </div>
+            <h3 className="text-2xl font-bold mb-2 tracking-tight text-white">{config.title}</h3>
+            <p className="text-slate-400 text-sm leading-relaxed mb-10">
+              {config.message}
+            </p>
+            <div className="flex flex-col gap-3">
+              <button 
+                onClick={handleConfirm}
+                disabled={submitting}
+                className={`w-full py-4 rounded-2xl font-bold flex items-center justify-center gap-2 transition-all active:scale-[0.98] ${
+                  config.isDestructive 
+                    ? 'bg-red-500 text-white hover:bg-red-400 shadow-lg shadow-red-500/20' 
+                    : 'bg-indigo-500 text-white hover:bg-indigo-400 shadow-lg shadow-indigo-500/20'
+                } disabled:opacity-50`}
+              >
+                {submitting ? 'Working...' : (config.confirmLabel || 'Confirm')}
+              </button>
+              <button 
+                onClick={onClose}
+                disabled={submitting}
+                className="w-full py-4 text-slate-400 text-sm font-bold hover:text-white transition-colors"
+              >
+                Cancel
+              </button>
+            </div>
+          </motion.div>
+        </div>
+      )}
+    </AnimatePresence>
+  );
+};
 
 interface SidebarItemProps {
   icon: ReactNode;

@@ -1,7 +1,7 @@
 import { initializeApp } from 'firebase/app';
 import { getAuth, GoogleAuthProvider, signInWithPopup, signOut } from 'firebase/auth';
 import { initializeFirestore, doc, getDocFromServer } from 'firebase/firestore';
-import { getStorage } from 'firebase/storage';
+import { getStorage, connectStorageEmulator } from 'firebase/storage';
 import firebaseConfig from '../../firebase-applet-config.json';
 
 const app = initializeApp(firebaseConfig);
@@ -10,6 +10,13 @@ export const db = initializeFirestore(app, {
 }, firebaseConfig.firestoreDatabaseId); 
 export const auth = getAuth(app);
 export const storage = getStorage(app);
+
+// Increase timeout settings for storage
+// Note: Firebase Storage JS SDK doesn't have a direct 'timeout' property on getStorage,
+// but we can set it on the task if needed. 
+// However, setting the max retry time globally can help.
+// Unfortunately, the modern SDK hides some of these behind internal configurations.
+// We will stick with the resumable upload which is better at handling interruptions.
 export const googleProvider = new GoogleAuthProvider();
 
 // Validation connection as per instructions

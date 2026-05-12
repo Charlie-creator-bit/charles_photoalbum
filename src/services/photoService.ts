@@ -16,6 +16,7 @@ import {
 import { 
   ref, 
   uploadBytes, 
+  uploadBytesResumable,
   getDownloadURL, 
   deleteObject 
 } from 'firebase/storage';
@@ -167,17 +168,63 @@ export const photoService = {
   uploadFile: async (file: File): Promise<string> => {
     if (!auth.currentUser) throw new Error('Not authenticated');
     
-    const timestamp = Date.now();
-    const fileName = `${auth.currentUser.uid}/${timestamp}_${file.name}`;
-    const storageRef = ref(storage, `photos/${fileName}`);
-    
+    // Attempt Firebase Storage first
     try {
-      const snapshot = await uploadBytes(storageRef, file);
-      const downloadURL = await getDownloadURL(snapshot.ref);
-      return downloadURL;
-    } catch (error: any) {
-      console.error('Storage upload error:', error);
-      throw new Error(`Failed to upload to storage: ${error.message}`);
+      const timestamp = Date.now();
+      const fileName = `${auth.currentUser.uid}/${timestamp}_${file.name}`;
+      const storageRef = ref(storage, `photos/${fileName}`);
+      
+      return await new Promise((resolve, reject) => {
+        // Set a timeout for the entire operation to avoid infinite hanging
+        const timeout = setTimeout(() => {
+          reject(new Error('Firebase Storage upload timed out. Falling back to local server...'));
+        }, 30000); // 30 second timeout for cloud upload
+
+        const uploadTask = uploadBytesResumable(storageRef, file);
+
+        uploadTask.on('state_changed', 
+          (snapshot) => {
+            const progress = (snapshot.bytesTransferred / snapshot.totalBytes) * 100;
+            console.log('Firebase Upload: ' + Math.round(progress) + '% done');
+          }, 
+          (error) => {
+            clearTimeout(timeout);
+            console.warn('Firebase Storage upload failed, will try fallback:', error.code, error.message);
+            reject(error);
+          }, 
+          async () => {
+            clearTimeout(timeout);
+            const downloadURL = await getDownloadURL(uploadTask.snapshot.ref);
+            resolve(downloadURL);
+          }
+        );
+      });
+    } catch (cloudError: any) {
+      console.warn('Cloud upload failed, attempting local server fallback...', cloudError);
+      
+      // Fallback: Local Server Upload
+      try {
+        const formData = new FormData();
+        formData.append('files', file);
+        
+        const response = await fetch('/api/upload', {
+          method: 'POST',
+          body: formData,
+        });
+        
+        if (!response.ok) {
+          const errorData = await response.json().catch(() => ({ error: 'Local upload fallback failed' }));
+          throw new Error(errorData.error || 'Local upload fallback failed');
+        }
+        
+        const data = await response.json();
+        const localUrl = data.urls[0];
+        console.log('Successfully uploaded to local server fallback:', localUrl);
+        return localUrl;
+      } catch (localError: any) {
+        console.error('Both Cloud and Local upload failed:', localError);
+        throw new Error(`Upload failed. Cloud: ${cloudError.message}. Local: ${localError.message}`);
+      }
     }
   },
 
