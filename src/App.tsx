@@ -580,20 +580,8 @@ function UploadForm({ albums, onClose, defaultAlbumId }: { albums: Album[], onCl
     
     try {
       if (files.length > 0) {
-        const formData = new FormData();
-        files.forEach(f => formData.append('files', f));
-        
-        const response = await fetch('/api/upload', {
-          method: 'POST',
-          body: formData,
-        });
-        
-        if (!response.ok) {
-          const errorData = await response.json().catch(() => ({ error: 'Upload failed' }));
-          throw new Error(errorData.error || 'Upload failed');
-        }
-        const data = await response.json();
-        const urls = data.urls as string[];
+        // Use Firebase Storage instead of /api/upload
+        const urls = await Promise.all(files.map(file => photoService.uploadFile(file)));
 
         // Create entries in Firestore for each photo
         await Promise.all(urls.map((u, i) => {

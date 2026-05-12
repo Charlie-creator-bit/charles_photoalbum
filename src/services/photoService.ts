@@ -13,7 +13,13 @@ import {
   getDocs,
   getDocFromServer
 } from 'firebase/firestore';
-import { db, auth } from './firebase';
+import { 
+  ref, 
+  uploadBytes, 
+  getDownloadURL, 
+  deleteObject 
+} from 'firebase/storage';
+import { db, auth, storage } from './firebase';
 
 export enum OperationType {
   CREATE = 'create',
@@ -158,6 +164,23 @@ export const photoService = {
     }
   },
 
+  uploadFile: async (file: File): Promise<string> => {
+    if (!auth.currentUser) throw new Error('Not authenticated');
+    
+    const timestamp = Date.now();
+    const fileName = `${auth.currentUser.uid}/${timestamp}_${file.name}`;
+    const storageRef = ref(storage, `photos/${fileName}`);
+    
+    try {
+      const snapshot = await uploadBytes(storageRef, file);
+      const downloadURL = await getDownloadURL(snapshot.ref);
+      return downloadURL;
+    } catch (error: any) {
+      console.error('Storage upload error:', error);
+      throw new Error(`Failed to upload to storage: ${error.message}`);
+    }
+  },
+
   updatePhoto: async (photoId: string, updates: Partial<Pick<Photo, 'title' | 'description' | 'albumId' | 'tags' | 'isPublic'>>) => {
     try {
       const docRef = doc(db, PHOTOS_COL, photoId);
@@ -179,7 +202,15 @@ export const photoService = {
           });
         } catch (err) {
           console.error('Failed to delete physical file:', err);
-          // We continue anyway to at least delete the firestore record
+        }
+      } 
+      // If it's a Firebase Storage URL, delete it there
+      else if (photo.url.includes('firebasestorage.googleapis.com')) {
+        try {
+          const storageRef = ref(storage, photo.url);
+          await deleteObject(storageRef);
+        } catch (err) {
+          console.error('Failed to delete storage file:', err);
         }
       }
 
