@@ -25,43 +25,45 @@ async function startServer() {
   // Configure Multer for local storage
   const storage = multer.diskStorage({
     destination: (req, file, cb) => {
-      console.log(`Saving file to: ${uploadsDir}`);
+      console.log(`[Multer] Saving file: ${file.originalname}`);
       cb(null, uploadsDir);
     },
     filename: (req, file, cb) => {
       const uniqueSuffix = Date.now() + "-" + Math.round(Math.random() * 1e9);
-      const filename = file.fieldname + "-" + uniqueSuffix + path.extname(file.originalname);
-      console.log(`Generated filename: ${filename}`);
+      const filename = `${uniqueSuffix}-${file.originalname.replace(/[^a-zA-Z0-9.-]/g, "_")}`;
+      console.log(`[Multer] Generated filename: ${filename}`);
       cb(null, filename);
     },
   });
 
   const upload = multer({ 
     storage: storage,
-    limits: { fileSize: 10 * 1024 * 1024 } // 10MB limit
+    limits: { fileSize: 20 * 1024 * 1024 } // Increase to 20MB limit
   });
 
   // API Routes
   app.post("/api/upload", (req, res) => {
-    console.log("Upload request received");
-    upload.array("files")(req, res, (err) => {
+    console.log("[API] /api/upload request received");
+    
+    // Use upload.any() to handle any field name, specifically 'files'
+    upload.any()(req, res, (err) => {
       if (err instanceof multer.MulterError) {
-        console.error("Multer error:", err);
+        console.error("[Multer Error]:", err);
         return res.status(400).json({ error: `Upload error: ${err.message}` });
       } else if (err) {
-        console.error("Unknown error during upload:", err);
+        console.error("[Unknown Upload Error]:", err);
         return res.status(500).json({ error: "Server error during upload" });
       }
 
-      if (!req.files || (req.files as Express.Multer.File[]).length === 0) {
-        console.warn("No files in request");
+      const uploadedFiles = req.files as Express.Multer.File[];
+      if (!uploadedFiles || uploadedFiles.length === 0) {
+        console.warn("[API] No files received in request");
         return res.status(400).json({ error: "No files uploaded" });
       }
       
-      const files = req.files as Express.Multer.File[];
-      console.log(`${files.length} files uploaded successfully`);
+      console.log(`[API] Successfully uploaded ${uploadedFiles.length} file(s)`);
       
-      const urls = files.map(file => `/uploads/${file.filename}`);
+      const urls = uploadedFiles.map(file => `/uploads/${file.filename}`);
       res.json({ urls });
     });
   });

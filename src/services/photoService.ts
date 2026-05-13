@@ -175,10 +175,10 @@ export const photoService = {
       const storageRef = ref(storage, `photos/${fileName}`);
       
       return await new Promise((resolve, reject) => {
-        // Set a timeout for the entire operation to avoid infinite hanging
+        // Increase timeout to 60 seconds for cloud upload
         const timeout = setTimeout(() => {
-          reject(new Error('Firebase Storage upload timed out. Falling back to local server...'));
-        }, 30000); // 30 second timeout for cloud upload
+          reject(new Error('Firebase Storage upload timed out after 60s. Attempting local server fallback...'));
+        }, 60000); 
 
         const uploadTask = uploadBytesResumable(storageRef, file);
 
@@ -189,18 +189,22 @@ export const photoService = {
           }, 
           (error) => {
             clearTimeout(timeout);
-            console.warn('Firebase Storage upload failed, will try fallback:', error.code, error.message);
+            console.warn('Firebase Storage upload failed (Code: ' + error.code + '):', error.message);
             reject(error);
           }, 
           async () => {
             clearTimeout(timeout);
-            const downloadURL = await getDownloadURL(uploadTask.snapshot.ref);
-            resolve(downloadURL);
+            try {
+              const downloadURL = await getDownloadURL(uploadTask.snapshot.ref);
+              resolve(downloadURL);
+            } catch (err: any) {
+              reject(new Error('Failed to get download URL: ' + err.message));
+            }
           }
         );
       });
     } catch (cloudError: any) {
-      console.warn('Cloud upload failed, attempting local server fallback...', cloudError);
+      console.warn('Cloud upload stage failed, trying local server fallback...', cloudError.message || cloudError);
       
       // Fallback: Local Server Upload
       try {
@@ -213,17 +217,32 @@ export const photoService = {
         });
         
         if (!response.ok) {
-          const errorData = await response.json().catch(() => ({ error: 'Local upload fallback failed' }));
-          throw new Error(errorData.error || 'Local upload fallback failed');
+          const statusText = response.statusText;
+          const statusCode = response.status;
+          let errorMessage = 'Local upload failed';
+          
+          try {
+            const errorData = await response.json();
+            errorMessage = errorData.error || errorMessage;
+          } catch (e) {
+            // Fallback if not JSON
+            errorMessage = `Local server returned ${statusCode} ${statusText}`;
+          }
+          
+          throw new Error(errorMessage);
         }
         
         const data = await response.json();
+        if (!data.urls || data.urls.length === 0) {
+          throw new Error('Local server did not return any URLs');
+        }
+        
         const localUrl = data.urls[0];
         console.log('Successfully uploaded to local server fallback:', localUrl);
         return localUrl;
       } catch (localError: any) {
-        console.error('Both Cloud and Local upload failed:', localError);
-        throw new Error(`Upload failed. Cloud: ${cloudError.message}. Local: ${localError.message}`);
+        console.error('Final upload failure after cloud and local attempts:', localError);
+        throw new Error(`Upload failed completely. Cloud error: ${cloudError.message || 'Timeout'}. Local error: ${localError.message}`);
       }
     }
   },
