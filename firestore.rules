@@ -27,13 +27,13 @@ service cloud.firestore {
 
     function isValidPhoto(data) {
       return data.keys().hasAll(['url', 'userId', 'createdAt']) &&
-             data.url is string && data.url.size() <= 2048 &&
+             data.url is string && data.url.size() <= 1500000 &&
              data.userId == request.auth.uid &&
              data.createdAt == request.time &&
              (data.get('isPublic', false) is bool) &&
              (data.get('title', '') is string && data.title.size() <= 200) &&
              (data.get('description', '') is string && data.description.size() <= 1000) &&
-             (data.get('albumId', null) == null || (isValidId(data.albumId) && exists(/databases/$(database)/documents/albums/$(data.albumId)))) &&
+             (data.get('albumId', null) == null || (isValidId(data.albumId) && get(/databases/$(database)/documents/albums/$(data.albumId)).data.userId == request.auth.uid)) &&
              (data.get('tags', []) is list && data.tags.size() <= 20);
     }
 

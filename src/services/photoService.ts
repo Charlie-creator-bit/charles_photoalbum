@@ -6,21 +6,13 @@ import {
   doc, 
   query, 
   where, 
-  orderBy, 
   onSnapshot,
   serverTimestamp,
   Timestamp,
-  getDocs,
-  getDocFromServer
+  getDocFromServer,
+  getDoc
 } from 'firebase/firestore';
-import { 
-  ref, 
-  uploadBytes, 
-  uploadBytesResumable,
-  getDownloadURL, 
-  deleteObject 
-} from 'firebase/storage';
-import { db, auth, storage } from './firebase';
+import { db, auth } from './firebase';
 
 export enum OperationType {
   CREATE = 'create',
@@ -65,13 +57,13 @@ function handleFirestoreError(error: unknown, operationType: OperationType, path
     operationType,
     path
   };
-  console.error('Firestore Error: ', JSON.stringify(errInfo));
+  console.error('Firestore Permission Error: ', JSON.stringify(errInfo));
   throw new Error(JSON.stringify(errInfo));
 }
 
 export interface Photo {
   id: string;
-  url: string;
+  url: string; // This will be the base64 string
   title?: string;
   description?: string;
   albumId?: string | null;
@@ -92,22 +84,89 @@ export interface Album {
 const PHOTOS_COL = 'photos';
 const ALBUMS_COL = 'albums';
 
+// Helper for image compression
+const compressImage = async (file: File, maxDimension: number = 1600, maxSizeBytes: number = 1048487): Promise<string> => {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.readAsDataURL(file);
+    reader.onload = (event) => {
+      const img = new Image();
+      img.src = event.target?.result as string;
+      img.onload = () => {
+        const canvas = document.createElement('canvas');
+        let width = img.width;
+        let height = img.height;
+
+        if (width > height) {
+          if (width > maxDimension) {
+            height *= maxDimension / width;
+            width = maxDimension;
+          }
+        } else {
+          if (height > maxDimension) {
+            width *= maxDimension / height;
+            height = maxDimension;
+          }
+        }
+
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) return reject(new Error('Failed to get canvas context'));
+
+        let quality = 0.9;
+        let base64 = '';
+
+        const attemptCompression = () => {
+          ctx.clearRect(0, 0, width, height);
+          ctx.drawImage(img, 0, 0, width, height);
+          base64 = canvas.toDataURL('image/jpeg', quality);
+
+          // Approximate byte size check
+          const sizeInBytes = Math.floor((base64.length * 3) / 4);
+
+          if (sizeInBytes > maxSizeBytes && quality > 0.1) {
+            quality -= 0.1;
+            attemptCompression();
+          } else {
+            resolve(base64);
+          }
+        };
+
+        attemptCompression();
+      };
+      img.onerror = () => reject(new Error('Failed to load image'));
+    };
+    reader.onerror = () => reject(new Error('Failed to read file'));
+  });
+};
+
 export const photoService = {
   getPhotos: (albumId: string | null, callback: (photos: Photo[]) => void) => {
     if (!auth.currentUser) return () => {};
     
+    // Always filter by userId
     let q = query(
       collection(db, PHOTOS_COL),
-      where('userId', '==', auth.currentUser.uid),
-      orderBy('createdAt', 'desc')
+      where('userId', '==', auth.currentUser.uid)
     );
 
+    // If albumId is provided, filter by it too
     if (albumId) {
       q = query(q, where('albumId', '==', albumId));
     }
 
+    // Subscribe to changes
     return onSnapshot(q, (snapshot) => {
       const photos = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Photo));
+      
+      // Perform sorting in-memory to avoid requiring a composite index in Firestore
+      photos.sort((a, b) => {
+        const timeA = a.createdAt?.toMillis() || 0;
+        const timeB = b.createdAt?.toMillis() || 0;
+        return timeB - timeA; // Descending
+      });
+      
       callback(photos);
     }, (error) => {
       handleFirestoreError(error, OperationType.LIST, PHOTOS_COL);
@@ -119,12 +178,19 @@ export const photoService = {
 
     const q = query(
       collection(db, ALBUMS_COL),
-      where('userId', '==', auth.currentUser.uid),
-      orderBy('createdAt', 'desc')
+      where('userId', '==', auth.currentUser.uid)
     );
 
     return onSnapshot(q, (snapshot) => {
       const albums = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Album));
+      
+      // In-memory sort
+      albums.sort((a, b) => {
+        const timeA = a.createdAt?.toMillis() || 0;
+        const timeB = b.createdAt?.toMillis() || 0;
+        return timeB - timeA;
+      });
+      
       callback(albums);
     }, (error) => {
       handleFirestoreError(error, OperationType.LIST, ALBUMS_COL);
@@ -146,8 +212,31 @@ export const photoService = {
     }
   },
 
+  uploadFile: async (file: File): Promise<string> => {
+    if (!auth.currentUser) throw new Error('Not authenticated');
+    
+    if (file.size > 4 * 1024 * 1024) {
+      throw new Error('File size exceeds the 4MB limit for initial upload');
+    }
+
+    return await compressImage(file);
+  },
+
   uploadPhoto: async (url: string, title: string = '', description: string = '', albumId: string | null = null) => {
     if (!auth.currentUser) throw new Error('Not authenticated');
+    
+    // Security check: Verify album belongs to user if albumId is provided
+    if (albumId) {
+      try {
+        const albumDoc = await getDoc(doc(db, ALBUMS_COL, albumId));
+        if (!albumDoc.exists() || albumDoc.data()?.userId !== auth.currentUser.uid) {
+          throw new Error('Permission denied: You do not own this album.');
+        }
+      } catch (err) {
+        handleFirestoreError(err, OperationType.GET, `${ALBUMS_COL}/${albumId}`);
+      }
+    }
+
     try {
       const docRef = await addDoc(collection(db, PHOTOS_COL), {
         url,
@@ -165,88 +254,6 @@ export const photoService = {
     }
   },
 
-  uploadFile: async (file: File): Promise<string> => {
-    if (!auth.currentUser) throw new Error('Not authenticated');
-    
-    // Attempt Firebase Storage first
-    try {
-      const timestamp = Date.now();
-      const fileName = `${auth.currentUser.uid}/${timestamp}_${file.name}`;
-      const storageRef = ref(storage, `photos/${fileName}`);
-      
-      return await new Promise((resolve, reject) => {
-        // Increase timeout to 60 seconds for cloud upload
-        const timeout = setTimeout(() => {
-          reject(new Error('Firebase Storage upload timed out after 60s. Attempting local server fallback...'));
-        }, 60000); 
-
-        const uploadTask = uploadBytesResumable(storageRef, file);
-
-        uploadTask.on('state_changed', 
-          (snapshot) => {
-            const progress = (snapshot.bytesTransferred / snapshot.totalBytes) * 100;
-            console.log('Firebase Upload: ' + Math.round(progress) + '% done');
-          }, 
-          (error) => {
-            clearTimeout(timeout);
-            console.warn('Firebase Storage upload failed (Code: ' + error.code + '):', error.message);
-            reject(error);
-          }, 
-          async () => {
-            clearTimeout(timeout);
-            try {
-              const downloadURL = await getDownloadURL(uploadTask.snapshot.ref);
-              resolve(downloadURL);
-            } catch (err: any) {
-              reject(new Error('Failed to get download URL: ' + err.message));
-            }
-          }
-        );
-      });
-    } catch (cloudError: any) {
-      console.warn('Cloud upload stage failed, trying local server fallback...', cloudError.message || cloudError);
-      
-      // Fallback: Local Server Upload
-      try {
-        const formData = new FormData();
-        formData.append('files', file);
-        
-        const response = await fetch('/api/upload', {
-          method: 'POST',
-          body: formData,
-        });
-        
-        if (!response.ok) {
-          const statusText = response.statusText;
-          const statusCode = response.status;
-          let errorMessage = 'Local upload failed';
-          
-          try {
-            const errorData = await response.json();
-            errorMessage = errorData.error || errorMessage;
-          } catch (e) {
-            // Fallback if not JSON
-            errorMessage = `Local server returned ${statusCode} ${statusText}`;
-          }
-          
-          throw new Error(errorMessage);
-        }
-        
-        const data = await response.json();
-        if (!data.urls || data.urls.length === 0) {
-          throw new Error('Local server did not return any URLs');
-        }
-        
-        const localUrl = data.urls[0];
-        console.log('Successfully uploaded to local server fallback:', localUrl);
-        return localUrl;
-      } catch (localError: any) {
-        console.error('Final upload failure after cloud and local attempts:', localError);
-        throw new Error(`Upload failed completely. Cloud error: ${cloudError.message || 'Timeout'}. Local error: ${localError.message}`);
-      }
-    }
-  },
-
   updatePhoto: async (photoId: string, updates: Partial<Pick<Photo, 'title' | 'description' | 'albumId' | 'tags' | 'isPublic'>>) => {
     try {
       const docRef = doc(db, PHOTOS_COL, photoId);
@@ -258,28 +265,7 @@ export const photoService = {
 
   deletePhoto: async (photo: Photo) => {
     try {
-      // If it's a local upload, try to delete it from the server
-      if (photo.url.startsWith('/uploads/')) {
-        try {
-          await fetch('/api/upload', {
-            method: 'DELETE',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ url: photo.url })
-          });
-        } catch (err) {
-          console.error('Failed to delete physical file:', err);
-        }
-      } 
-      // If it's a Firebase Storage URL, delete it there
-      else if (photo.url.includes('firebasestorage.googleapis.com')) {
-        try {
-          const storageRef = ref(storage, photo.url);
-          await deleteObject(storageRef);
-        } catch (err) {
-          console.error('Failed to delete storage file:', err);
-        }
-      }
-
+      // Photo is now entirely in Firestore, no external files to delete.
       const docRef = doc(db, PHOTOS_COL, photo.id);
       await deleteDoc(docRef);
     } catch (error) {
@@ -291,8 +277,6 @@ export const photoService = {
     try {
       const docRef = doc(db, ALBUMS_COL, albumId);
       await deleteDoc(docRef);
-      // Note: Ideally, we should also handle photos with this albumId (set to null or delete)
-      // but firestore rules will block unauthorized access anyway.
     } catch (error) {
       handleFirestoreError(error, OperationType.DELETE, `${ALBUMS_COL}/${albumId}`);
     }
@@ -313,7 +297,6 @@ export const photoService = {
   },
 
   deleteAllPhotos: async (photos: Photo[]) => {
-    // Delete all photos concurrently
     return Promise.all(photos.map(p => photoService.deletePhoto(p)));
   }
 };

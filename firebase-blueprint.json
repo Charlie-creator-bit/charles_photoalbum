@@ -19,7 +19,7 @@
       "properties": {
         "title": { "type": "string", "description": "The title of the photo." },
         "description": { "type": "string", "description": "A description of the photo." },
-        "url": { "type": "string", "format": "uri", "description": "The URL of the photo image." },
+        "url": { "type": "string", "description": "The base64 encoded string of the photo image (must be < 1MB)." },
         "albumId": { "type": "string", "description": "The ID of the album this photo belongs to." },
         "userId": { "type": "string", "description": "The ID of the user who uploaded the photo." },
         "isPublic": { "type": "boolean", "description": "Whether the photo is shareable with a public link." },
