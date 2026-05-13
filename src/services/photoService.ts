@@ -57,8 +57,12 @@ function handleFirestoreError(error: unknown, operationType: OperationType, path
     operationType,
     path
   };
+  const errorMessage = error instanceof Error ? error.message : String(error);
+  if (errorMessage.toLowerCase().includes('permission-denied') || errorMessage.toLowerCase().includes('insufficient permissions')) {
+    console.error('CRITICAL: Firebase Permission Denied. If this is on Vercel, visit your Firebase Console -> Authentication -> Settings -> Authorized Domains and add your Vercel URL.');
+  }
   console.error('Firestore Permission Error: ', JSON.stringify(errInfo));
-  throw new Error(JSON.stringify(errInfo));
+  throw new Error(`Upload Failed: ${errorMessage}. If on Vercel, check Authorized Domains in Firebase console.`);
 }
 
 export interface Photo {
